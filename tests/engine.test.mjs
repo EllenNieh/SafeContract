@@ -1,0 +1,18 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createEscrow,transition} from '../src/engine.mjs';
+const t=1_700_000_000_000;
+const base=()=>createEscrow({buyer:'buyer',seller:'seller',amount:5000,deadlineHours:24,now:t});
+const funded=()=>transition(base(),'FUND','buyer',t+1000);
+test('正常交易：託管後買方確認，釋放給賣方',()=>{const s=transition(funded(),'CONFIRM','buyer',t+2000);assert.equal(s.status,'RELEASED');assert.equal(s.recipient,'seller');assert.equal(s.balance,0)});
+test('賣方不能自行確認交付',()=>assert.throws(()=>transition(funded(),'CONFIRM','seller',t+2000),/只有買方/));
+test('陌生人不能確認交付',()=>assert.throws(()=>transition(funded(),'CONFIRM','attacker',t+2000),/只有買方/));
+test('不可重複付款',()=>assert.throws(()=>transition(funded(),'FUND','buyer',t+2000),/不可重複/));
+test('逾期前不可退款',()=>assert.throws(()=>transition(funded(),'REFUND_TIMEOUT','buyer',t+2000),/尚未到期/));
+test('逾期後買方可退款',()=>{const s=transition(funded(),'REFUND_TIMEOUT','buyer',t+25*3600000);assert.equal(s.status,'REFUNDED');assert.equal(s.recipient,'buyer')});
+test('爭議由仲裁者退款',()=>{const d=transition(funded(),'DISPUTE','buyer',t+2000);const s=transition(d,'RESOLVE_REFUND','arbiter',t+3000);assert.equal(s.status,'REFUNDED')});
+test('賣方不能自行裁決爭議',()=>{const d=transition(funded(),'DISPUTE','seller',t+2000);assert.throws(()=>transition(d,'RESOLVE_RELEASE','seller',t+3000),/獨立仲裁者/)});
+test('結束後不能二次放款',()=>{const s=transition(funded(),'CONFIRM','buyer',t+2000);assert.throws(()=>transition(s,'CONFIRM','buyer',t+3000),/目前無法/)});
+test('金額必須是安全正整數',()=>{for(const amount of [0,-1,1.2,Number.MAX_SAFE_INTEGER+1])assert.throws(()=>createEscrow({buyer:'a',seller:'b',amount,now:t}))});
+test('買賣雙方不可相同',()=>assert.throws(()=>createEscrow({buyer:'a',seller:'a',amount:1,now:t})));
+test('未知操作被拒絕',()=>assert.throws(()=>transition(base(),'STEAL','attacker',t),/未知操作/));
